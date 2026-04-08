@@ -4,46 +4,50 @@ from PIL import Image
 import io
 
 # --- 1. 頁面基礎設定 ---
-st.set_page_config(
-    page_title="地震速報 AI 播報助手",
-    page_icon="🌋",
-    layout="centered"
-)
-
-# 套用一點簡單的自定義 CSS 增加專業感
-st.markdown("""
-    <style>
-    .main { background-color: #f8f9fa; }
-    .stButton>button { width: 100%; border-radius: 20px; height: 3em; background-color: #007bff; color: white; }
-    </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(page_title="地震速報 AI 助手", page_icon="🌋")
 
 st.title("🌋 地震速報 AI 播報助手")
-st.write("上傳氣象署圖卡，自動產出專業主播文稿與標題。")
+st.write("上傳圖卡，自動產出專業主播文稿。")
 
-# --- 2. 取得 API Key (優先從 Secrets 讀取) ---
+# --- 2. 取得 API Key ---
 API_KEY = st.secrets.get("api_key")
 
 if not API_KEY:
     with st.sidebar:
-        st.warning("🔑 尚未偵測到 API Key")
         API_KEY = st.text_input("請輸入 Gemini API Key", type="password")
-        st.caption("取得 Key: [Google AI Studio](https://aistudio.google.com/)")
 
-# --- 3. 定義快取函式 (這能幫你省下大量額度！) ---
+# --- 3. 定義快取函式 (修正語法錯誤版本) ---
 @st.cache_data(show_spinner=False)
 def get_ai_response(api_key, model_name, image_bytes):
-    """
-    使用快取確保同一張圖片不會重複呼叫 API 扣額度。
-    """
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(model_name)
-    
-    # 將 bytes 轉回 PIL Image 供 AI 讀取
     img = Image.open(io.BytesIO(image_bytes))
     
-    prompt = """
-    你是一位專業的新聞台編稿人員。請精確讀取地震速報圖卡內容，並按照以下格式產出：
+    # 確保這裡的引號有開有寫
+    prompt = "你是一位專業新聞主播。請根據這張地震圖卡，產出一份包含【新聞標題】與【主播文稿】的內容。標題格式：[時間][地點]規模[數字]地震。文稿請參考氣象署格式，確保各地震度準確。"
     
-    【新聞主播文稿】
-    最新消息，根據氣象署最新資訊，今天[日期]稍早[時間]發生芮氏規模
+    response = model.generate_content([prompt, img])
+    return response.text
+
+# --- 4. 執行介面 ---
+uploaded_file = st.file_uploader("上傳地震圖卡", type=["jpg", "jpeg", "png"])
+
+if uploaded_file is not None:
+    file_bytes = uploaded_file.read()
+    st.image(Image.open(io.BytesIO(file_bytes)), use_container_width=True)
+    
+    if st.button("🚀 產出主播文稿"):
+        if not API_KEY:
+            st.error("請提供 API Key")
+        else:
+            try:
+                with st.spinner('AI 編稿中...'):
+                    # 如果 gemini-2.5-flash 還是不行，可以改成 gemini-1.5-flash
+                    result = get_ai_response(API_KEY, "gemini-1.5-flash", file_bytes)
+                    st.success("產出成功！")
+                    st.markdown("---")
+                    st.markdown(result)
+            except Exception as e:
+                st.error(f"錯誤：{e}")
+                if "429" in str(e):
+                    st.warning("提醒：流量超限，請等 30 秒再試。")
