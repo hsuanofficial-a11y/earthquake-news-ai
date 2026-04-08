@@ -3,33 +3,36 @@ import google.generativeai as genai
 from PIL import Image
 import io
 
-# --- 1. 頁面基礎設定 ---
+# --- 1. 基礎設定 ---
 st.set_page_config(page_title="地震速報 AI 助手", page_icon="🌋")
-
 st.title("🌋 地震速報 AI 播報助手")
-st.write("上傳圖卡，自動產出專業主播文稿。")
 
 # --- 2. 取得 API Key ---
 API_KEY = st.secrets.get("api_key")
-
 if not API_KEY:
     with st.sidebar:
-        API_KEY = st.text_input("請輸入 Gemini API Key", type="password")
+        API_KEY = st.text_input("請輸入 API Key", type="password")
 
-# --- 3. 定義快取函式 (修正語法錯誤版本) ---
+# --- 3. 自動偵測模型的快取函式 ---
 @st.cache_data(show_spinner=False)
-def get_ai_response(api_key, model_name, image_bytes):
+def get_ai_response(api_key, image_bytes):
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name)
+    
+    # 【關鍵：自動找模型】不寫死名稱，直接從清單抓第一個可用的 Flash 模型
+    model_list = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+    # 優先選 2.5，沒 2.5 選 Flash，再沒辦法就選第一個
+    target = next((m for m in model_list if "2.5-flash" in m), 
+                 next((m for m in model_list if "flash" in m), model_list[0]))
+    
+    model = genai.GenerativeModel(target)
     img = Image.open(io.BytesIO(image_bytes))
     
-    # 確保這裡的引號有開有寫
     prompt = "你是一位專業新聞主播。請根據這張地震圖卡，產出一份包含【新聞標題】與【主播文稿】的內容。標題格式：[時間][地點]規模[數字]地震。文稿請參考氣象署格式，確保各地震度準確。"
     
     response = model.generate_content([prompt, img])
-    return response.text
+    return response.text, target
 
-# --- 4. 執行介面 ---
+# --- 4. 介面操作 ---
 uploaded_file = st.file_uploader("上傳地震圖卡", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
@@ -41,13 +44,18 @@ if uploaded_file is not None:
             st.error("請提供 API Key")
         else:
             try:
-                with st.spinner('AI 編稿中...'):
-                    # 如果 gemini-2.5-flash 還是不行，可以改成 gemini-1.5-flash
-                    result = get_ai_response(API_KEY, "gemini-1.5-flash", file_bytes)
-                    st.success("產出成功！")
+                with st.spinner('AI 正在尋找可用模型並編稿中...'):
+                    # 呼叫自動偵測函式
+                    result_text, used_model = get_ai_response(API_KEY, file_bytes)
+                    
+                    st.success(f"產出成功！(使用模型: {used_model})")
                     st.markdown("---")
-                    st.markdown(result)
+                    st.markdown(result_text)
             except Exception as e:
-                st.error(f"錯誤：{e}")
+                # 處理 429 額度超限
                 if "429" in str(e):
-                    st.warning("提醒：流量超限，請等 30 秒再試。")
+                    st.error("🚨 流量超限！免費版每分鐘限 5 次。")
+                    st.warning("請現場等候 20 秒，讓冷卻時間過去再試。")
+                else:
+                    st.error(f"連線錯誤：{e}")
+                    st.info("請確認 API Key 是否正確。")
